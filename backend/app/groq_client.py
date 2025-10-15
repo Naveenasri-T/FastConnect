@@ -1,158 +1,62 @@
-"""
-Groq Client - Interface for Groq API
-Handles communication with Groq's LLM services
-"""
-
+# backend/app/groq_client.py
 import os
-import asyncio
-from groq import Groq
-from typing import List, Dict, Optional
-import logging
+import json
+import httpx
+from typing import AsyncGenerator
+from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
+load_dotenv()
 
-class GroqClient:
-    """Client for interacting with Groq API"""
-    
-    def __init__(self):
-        """Initialize Groq client with API key from environment"""
-        self.api_key = os.getenv("GROQ_API_KEY")
-        
-        if not self.api_key:
-            raise ValueError("GROQ_API_KEY environment variable is required")
-        
-        self.client = Groq(api_key=self.api_key)
-        
-        # Available models
-        self.available_models = [
-            "mixtral-8x7b-32768",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "gemma-7b-it",
-            "gemma2-9b-it"
-        ]
-    
-    async def get_completion(
-        self, 
-        message: str, 
-        model: str = "mixtral-8x7b-32768",
-        temperature: float = 0.7,
-        max_tokens: int = 1024
-    ) -> str:
-        """
-        Get chat completion from Groq API
-        
-        Args:
-            message: User message to process
-            model: Model to use for completion
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            
-        Returns:
-            str: Generated response from the model
-        """
-        try:
-            logger.info(f"Sending request to Groq API - Model: {model}")
-            
-            # Run the synchronous Groq API call in a thread pool
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                self._sync_completion,
-                message,
-                model,
-                temperature,
-                max_tokens
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error in Groq API call: {str(e)}")
-            raise Exception(f"Groq API error: {str(e)}")
-    
-    def _sync_completion(
-        self, 
-        message: str, 
-        model: str, 
-        temperature: float, 
-        max_tokens: int
-    ) -> str:
-        """Synchronous completion call to Groq API"""
-        
-        chat_completion = self.client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": message,
-                }
-            ],
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        
-        return chat_completion.choices[0].message.content
-    
-    def get_available_models(self) -> List[str]:
-        """
-        Get list of available Groq models
-        
-        Returns:
-            List[str]: List of available model names
-        """
-        return self.available_models
-    
-    async def stream_completion(
-        self,
-        message: str,
-        model: str = "mixtral-8x7b-32768",
-        temperature: float = 0.7,
-        max_tokens: int = 1024
-    ):
-        """
-        Get streaming chat completion from Groq API
-        
-        Args:
-            message: User message to process
-            model: Model to use for completion
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            
-        Yields:
-            str: Streaming response chunks from the model
-        """
-        try:
-            logger.info(f"Starting streaming request to Groq API - Model: {model}")
-            
-            stream = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": message,
-                    }
-                ],
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=True,
-            )
-            
-            for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
-                    
-        except Exception as e:
-            logger.error(f"Error in Groq streaming API call: {str(e)}")
-            raise Exception(f"Groq streaming API error: {str(e)}")
-    
-    def validate_model(self, model: str) -> bool:
-        """
-        Validate if the model is available
-        
-        Args:
-            model: Model name to validate
-            
-        Returns:
-            bool: True if model is available, False otherwise
-        """
-        return model in self.available_models
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "compound-beta")
+GROQ_BASE = "https://api.groq.com/openai/v1"  # OpenAI-compatible endpoint
+
+if not GROQ_API_KEY:
+    raise RuntimeError("Missing GROQ_API_KEY in environment")
+
+HEADERS = {
+    "Authorization": f"Bearer {GROQ_API_KEY}",
+    "Content-Type": "application/json",
+}
+
+async def stream_chat_completion(prompt: str) -> AsyncGenerator[str, None]:
+    """
+    Calls the Groq chat completions endpoint with stream: true and yields
+    token deltas as they arrive (strings). The endpoint returns SSE lines like:
+      data: {"id": "...", "choices":[{"delta": {"content": "..."} }]}
+    and ends with: data: [DONE]
+    """
+    url = f"{GROQ_BASE}/chat/completions"
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "stream": True
+    }
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("POST", url, headers=HEADERS, json=payload) as resp:
+            resp.raise_for_status()
+            async for raw_line in resp.aiter_lines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                # SSE lines start with "data: "
+                if line.startswith("data:"):
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        parsed = json.loads(data_str)
+                        # OpenAI-compatible format: choices[].delta.content
+                        choices = parsed.get("choices", [])
+                        for choice in choices:
+                            delta = choice.get("delta", {})
+                            # there could be 'content' or other fields
+                            content = delta.get("content")
+                            if content:
+                                yield content
+                    except json.JSONDecodeError:
+                        # ignore non-json lines
+                        continue
