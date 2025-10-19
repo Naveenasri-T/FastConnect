@@ -124,8 +124,7 @@ with st.sidebar:
             st.info(f"Backend URL: {BACKEND_WS}")
     
     st.markdown("---")
-    
-    # Chat settings
+
     st.subheader("💬 Chat Options")
     max_messages = st.slider("Max messages to show", 5, 50, 20)
     
