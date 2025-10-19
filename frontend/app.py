@@ -35,6 +35,12 @@ st.markdown("""
         margin: 0.5rem 0;
         border-radius: 10px;
         border-left: 4px solid;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+    }
+    .chat-message:hover {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        transform: translateY(-1px);
     }
     .user-message {
         background-color: #e3f2fd;
@@ -47,6 +53,11 @@ st.markdown("""
     .error-message {
         background-color: #ffebee;
         border-left-color: #f44336;
+    }
+    /* Highlight the newest message */
+    .chat-message:first-of-type {
+        border: 2px solid #4caf50;
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
     }
     .status-box {
         padding: 0.5rem;
@@ -227,34 +238,85 @@ if send_button and user_input.strip():
             "timestamp": datetime.now().strftime("%H:%M:%S")
         })
         
+        # Auto-scroll to top (where newest message will appear)
+        st.markdown("""
+        <script>
+            window.scrollTo({top: 0, behavior: 'smooth'});
+        </script>
+        """, unsafe_allow_html=True)
+        
         st.rerun()
 
 # Display chat messages
-st.subheader("💬 Chat History")
+col_title, col_scroll = st.columns([3, 1])
+with col_title:
+    st.subheader("💬 Chat History")
+with col_scroll:
+    if len(st.session_state.messages) > 0:
+        if st.button("� Refresh", help="Refresh chat display", key="refresh_chat"):
+            st.rerun()
+
+# Show latest conversation snippet at the top for easy access
+if st.session_state.messages and len(st.session_state.messages) >= 2:
+    latest_user = st.session_state.messages[-2] if st.session_state.messages[-2]["role"] == "user" else None
+    latest_assistant = st.session_state.messages[-1] if st.session_state.messages[-1]["role"] == "assistant" else None
+    
+    if latest_user and latest_assistant:
+        with st.container():
+            st.markdown("### 🆕 Latest Conversation")
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.markdown(f"""
+                <div style="background: #e8f5e8; padding: 1rem; border-radius: 8px; border-left: 4px solid #4caf50;">
+                    <strong>👤 Your Last Question:</strong><br>
+                    <em>"{latest_user['content'][:100]}{'...' if len(latest_user['content']) > 100 else ''}"</em>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(f"""
+                <div style="background: #fff3e0; padding: 1rem; border-radius: 8px; border-left: 4px solid #ff9800;">
+                    <strong>🤖 Latest Response:</strong><br>
+                    <em>"{latest_assistant['content'][:100]}{'...' if len(latest_assistant['content']) > 100 else ''}"</em>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("---")
 
 if st.session_state.messages:
-    # Show only the last N messages
+    # Show only the last N messages IN REVERSE ORDER (newest first)
     recent_messages = st.session_state.messages[-max_messages:]
     
-    for i, message in enumerate(recent_messages):
+    # Display messages in reverse order (newest at top)
+    for i, message in enumerate(reversed(recent_messages)):
+        message_key = f"msg_{len(recent_messages) - i - 1}"
+        
         if message["role"] == "user":
             st.markdown(f"""
-            <div class="chat-message user-message">
+            <div class="chat-message user-message" id="{message_key}">
                 <strong>👤 You</strong> <small>({message.get('timestamp', '')})</small><br>
                 {message['content']}
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
-            <div class="chat-message assistant-message">
+            <div class="chat-message assistant-message" id="{message_key}">
                 <strong>🤖 Assistant</strong> <small>({message.get('timestamp', '')})</small><br>
                 {message['content']}
             </div>
             """, unsafe_allow_html=True)
     
-    # Show message count info
-    if len(st.session_state.messages) > max_messages:
-        st.info(f"Showing last {max_messages} messages out of {len(st.session_state.messages)} total messages.")
+    # Show message count info at bottom
+    info_col1, info_col2 = st.columns([2, 1])
+    with info_col1:
+        if len(st.session_state.messages) > max_messages:
+            st.info(f"📊 Showing {max_messages} most recent messages (out of {len(st.session_state.messages)} total)")
+        else:
+            st.success(f"📊 Showing all {len(st.session_state.messages)} messages")
+    
+    with info_col2:
+        st.markdown("**💡 Tip:** Newest messages appear at the top!")
 else:
     st.markdown("""
     <div style="text-align: center; padding: 3rem; color: #666;">
